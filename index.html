@@ -4506,6 +4506,44 @@
       .spec-secondary-actions {
         flex-direction: column;
       }
+      .viewer-3d-badge-top {
+        top: 6px;
+        left: 6px;
+        font-size: 0.6rem;
+        padding: 3px 7px;
+        max-width: calc(100% - 135px);
+      }
+      .viewer-3d-cross-section-box {
+        top: 6px;
+        right: 6px;
+        padding: 4px 6px;
+        gap: 1px;
+        border-radius: 7px;
+        background: rgba(10, 14, 22, 0.72);
+      }
+      .viewer-3d-cross-title {
+        font-size: 0.5rem;
+        letter-spacing: 0.4px;
+      }
+      #crossSectionCanvas {
+        width: 62px;
+        height: 32px;
+      }
+      .viewer-3d-cross-height {
+        font-size: 0.52rem;
+      }
+      .viewer-3d-controls {
+        bottom: 6px;
+        left: 6px;
+        right: 6px;
+      }
+      .viewer-3d-btn-group {
+        gap: 4px;
+      }
+      .btn-3d-ctrl {
+        padding: 4px 7px;
+        font-size: 0.66rem;
+      }
     }
 
     @media (max-width: 480px) {
@@ -4644,7 +4682,7 @@
           <div class="viewer-3d-stage" id="viewer3DStage">
             <canvas id="ring3DCanvas" width="760" height="420"></canvas>
             <div class="viewer-3d-badge-top">
-              <span>🔄 Arraste para girar em 3D • Role para Zoom</span>
+              <span>🔄 Arraste • Pinça ou Role p/ Zoom</span>
             </div>
             <div class="viewer-3d-cross-section-box" title="Corte transversal real calculado pelos raios da tabela">
               <span class="viewer-3d-cross-title">Corte do Perfil</span>
@@ -4658,6 +4696,8 @@
                 <button type="button" class="btn-3d-ctrl" onclick="setRing3DCameraPreset('front')">Frente</button>
                 <button type="button" class="btn-3d-ctrl" onclick="setRing3DCameraPreset('top')">Topo</button>
                 <button type="button" class="btn-3d-ctrl" onclick="setRing3DCameraPreset('side')">Perfil</button>
+                <button type="button" class="btn-3d-ctrl" onclick="adjustRing3DZoom(0.86)" title="Diminuir Zoom">−</button>
+                <button type="button" class="btn-3d-ctrl" onclick="adjustRing3DZoom(1.16)" title="Aumentar Zoom">+</button>
               </div>
             </div>
           </div>
@@ -9522,6 +9562,11 @@
       return 0;
     }
 
+    function adjustRing3DZoom(factor) {
+      ring3DState.zoom = Math.max(0.65, Math.min(2.2, ring3DState.zoom * factor));
+      renderRing3DFrame();
+    }
+
     function initRing3DWebGL() {
       const canvas = document.getElementById("ring3DCanvas");
       if (!canvas) return false;
@@ -9529,31 +9574,75 @@
       if (!ring3DState.initialized) {
         const stage = document.getElementById("viewer3DStage");
         if (stage) {
+          const activePointers = new Map();
+          let prevPinchDist = null;
+
+          const getPinchDistance = () => {
+            const pts = Array.from(activePointers.values());
+            if (pts.length < 2) return null;
+            return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+          };
+
           stage.addEventListener("pointerdown", (e) => {
             if (e.target.closest(".btn-3d-ctrl")) return;
-            ring3DState.isDragging = true;
-            ring3DState.lastX = e.clientX;
-            ring3DState.lastY = e.clientY;
-            stage.setPointerCapture(e.pointerId);
+            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+
+            if (activePointers.size === 1) {
+              ring3DState.isDragging = true;
+              ring3DState.lastX = e.clientX;
+              ring3DState.lastY = e.clientY;
+            } else if (activePointers.size === 2) {
+              ring3DState.isDragging = false;
+              prevPinchDist = getPinchDistance();
+            }
           });
+
           stage.addEventListener("pointermove", (e) => {
-            if (!ring3DState.isDragging) return;
-            const dx = e.clientX - ring3DState.lastX;
-            const dy = e.clientY - ring3DState.lastY;
-            ring3DState.lastX = e.clientX;
-            ring3DState.lastY = e.clientY;
-            ring3DState.rotY += dx * 0.011;
-            ring3DState.rotX = Math.max(-1.35, Math.min(1.35, ring3DState.rotX + dy * 0.011));
-            renderRing3DFrame();
+            if (!activePointers.has(e.pointerId)) return;
+            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            if (activePointers.size === 2) {
+              const newDist = getPinchDistance();
+              if (prevPinchDist && newDist && prevPinchDist > 4) {
+                adjustRing3DZoom(newDist / prevPinchDist);
+              }
+              prevPinchDist = newDist;
+              return;
+            }
+
+            if (activePointers.size === 1 && ring3DState.isDragging) {
+              const dx = e.clientX - ring3DState.lastX;
+              const dy = e.clientY - ring3DState.lastY;
+              ring3DState.lastX = e.clientX;
+              ring3DState.lastY = e.clientY;
+              ring3DState.rotY += dx * 0.011;
+              ring3DState.rotX = Math.max(-1.35, Math.min(1.35, ring3DState.rotX + dy * 0.011));
+              renderRing3DFrame();
+            }
           });
-          const stopDrag = () => { ring3DState.isDragging = false; };
-          stage.addEventListener("pointerup", stopDrag);
-          stage.addEventListener("pointercancel", stopDrag);
+
+          const stopPointer = (e) => {
+            activePointers.delete(e.pointerId);
+            if (activePointers.size < 2) {
+              prevPinchDist = null;
+            }
+            if (activePointers.size === 1) {
+              const remaining = Array.from(activePointers.values())[0];
+              ring3DState.isDragging = true;
+              ring3DState.lastX = remaining.x;
+              ring3DState.lastY = remaining.y;
+            } else if (activePointers.size === 0) {
+              ring3DState.isDragging = false;
+            }
+          };
+
+          stage.addEventListener("pointerup", stopPointer);
+          stage.addEventListener("pointercancel", stopPointer);
           stage.addEventListener("wheel", (e) => {
             e.preventDefault();
             const factor = e.deltaY > 0 ? 0.92 : 1.08;
-            ring3DState.zoom = Math.max(0.65, Math.min(1.85, ring3DState.zoom * factor));
-            renderRing3DFrame();
+            adjustRing3DZoom(factor);
           }, { passive: false });
         }
         ring3DState.initialized = true;
